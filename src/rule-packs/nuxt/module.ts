@@ -490,6 +490,7 @@ export async function writeManifest(
     autoImportEnabled: nuxt.options.imports?.autoImport !== false,
     autoImportTransform: serializeImportTransform(nuxt.options.imports?.transform),
     ...evidence?.nitroAutoImports,
+    componentTransformExclude: serializeImportTransform(nuxt.options.components?.transform).exclude,
     scannedComposableFiles:
       scannedAutoImportEntries === undefined
         ? undefined
@@ -523,7 +524,8 @@ export async function writeManifest(
                 {
                   name: component.pascalName,
                   file: resolve(srcDir, component.filePath),
-                  mode: component.mode,
+                  mode: component._raw ? "all" : component.mode,
+                  ...(component.global && { global: true }),
                 },
               ]
             : [],
@@ -575,6 +577,7 @@ export async function writeManifest(
     resolvedRouteRules: evidence?.nitroOptions?.routeRules
       ? JSON.parse(JSON.stringify(evidence.nitroOptions.routeRules))
       : undefined,
+    inlineRouteRules: nuxt.options.experimental?.inlineRouteRules === true,
     routeRulePageMtimes: evidence?.routeRulePageMtimes,
     routeRulePageInventory: evidence?.routeRulePageInventory,
     nitroPreset: !evidence?.nitroOptions?.dev ? evidence?.nitroOptions?.preset : undefined,

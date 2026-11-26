@@ -101,12 +101,37 @@ function componentFacts(value: unknown): boolean {
         strings(item.directives) &&
         strings(item.scope) &&
         typeof item.inFor === "boolean" &&
+        componentWrappers(item.wrappers) &&
         (item.parent === undefined ||
           (record(item.parent) &&
             typeof item.parent.tag === "string" &&
-            typeof item.parent.element === "boolean")),
+            typeof item.parent.element === "boolean" &&
+            (item.parent.foreign === undefined || item.parent.foreign === true))),
     ) &&
-    strings(value.bindingReferences)
+    strings(value.bindingReferences) &&
+    typeof value.inlineRouteRulesMayDisableSsr === "boolean" &&
+    facts(
+      value.dynamicRenders,
+      (render) =>
+        componentWrappers(render.wrappers) &&
+        optionalString(render.binding) &&
+        optionalString(render.name),
+    ) &&
+    (value.localComponents === undefined || strings(value.localComponents)) &&
+    typeof value.localComponentLookupKnown === "boolean" &&
+    optionalString(value.runtimeComponentName)
+  );
+}
+
+function componentWrappers(value: unknown): boolean {
+  return facts(
+    value,
+    (wrapper) =>
+      typeof wrapper.tag === "string" &&
+      typeof wrapper.renderTag === "string" &&
+      typeof wrapper.offset === "number" &&
+      typeof wrapper.defaultSlot === "boolean" &&
+      typeof wrapper.shadowed === "boolean",
   );
 }
 
