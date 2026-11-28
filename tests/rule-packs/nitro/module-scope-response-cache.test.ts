@@ -139,9 +139,79 @@ export async function load(key: string) {
   return rows
 }`,
   ],
+  [
+    "an age compared with a TTL",
+    `const cache = new Map<string, { value: unknown, at: number }>()
+const TTL = 60_000
+export async function load(key: string) {
+  const hit = cache.get(key)
+  if (hit && Date.now() - hit.at < TTL) return hit.value
+  const value = await $fetch('/value')
+  cache.set(key, { value, at: Date.now() })
+  return value
+}`,
+  ],
+  [
+    "an age from a clock local, with the TTL on the left",
+    `let snapshot: { rows: string[], fetchedAt: number } | undefined
+export async function getRows() {
+  const now = Date.now()
+  if (snapshot && 30_000 >= (now - snapshot.fetchedAt)) return snapshot.rows
+  const rows = await $fetch<string[]>('/rows')
+  snapshot = { rows, fetchedAt: now }
+  return rows
+}`,
+  ],
 ])("reports %s", async (_, source) => {
   const diagnostics = await run({ "server/utils/cache.ts": source });
   expect(diagnostics).toMatchObject([{ code: "NITRO0023", file: "server/utils/cache.ts" }]);
+});
+
+const fresh = "hit && Date.now() - hit.at < 60_000";
+const stale = "!hit || 60_000 <= Date.now() - hit.at";
+const refresh = `const value = await $fetch('/value')
+  cache.set(key, { value, at: Date.now() })
+  return value`;
+
+function ageCache(body: string, keySetup = "") {
+  return `const cache = new Map<string, { value: unknown, at: number }>()
+export async function load(key: string) {
+  const hit = cache.get(key)
+  ${keySetup}
+  ${body}
+}`;
+}
+
+test.each([
+  ["an explicit refresh branch", `if (${fresh}) return hit.value; else { ${refresh} }`],
+  ["an explicit stale-or-missing branch", `if (${stale}) { ${refresh} } else return hit.value`],
+  ["a stale-or-missing early return", `if (${stale}) { ${refresh} }\nreturn hit.value`],
+  [
+    "logging before a hit return",
+    `if (${fresh}) { console.debug('hit'); return hit.value }\n${refresh}`,
+  ],
+  [
+    "logging before the refresh write",
+    `if (${fresh}) return hit.value\n${refresh.replace("cache.set", "console.debug('refresh'); cache.set")}`,
+  ],
+])("reports age-based reuse with %s", async (_, body) => {
+  expect(await run({ "server/utils/cache.ts": ageCache(body) })).toMatchObject([
+    { code: "NITRO0023" },
+  ]);
+});
+
+test.each([
+  ["a reassigned", `if (${fresh}) return hit.value\n${refresh}`, "key = 'internal:' + key"],
+  ["a shadowed", `if (${fresh}) return hit.value; else { const key = 'internal'; ${refresh} }`, ""],
+])("does not report age-based reuse with %s Map key", async (_, body, keySetup) => {
+  expect(await run({ "server/utils/cache.ts": ageCache(body, keySetup) })).toEqual([]);
+});
+
+test("does not report a stale branch that refreshes but still returns the old hit", async () => {
+  const source = ageCache(
+    `if (${stale}) { ${refresh.replace("return value", "")} }\nreturn hit?.value`,
+  );
+  expect(await run({ "server/utils/cache.ts": source })).toEqual([]);
 });
 
 test("reports standalone Nitro server code", async () => {
@@ -273,6 +343,55 @@ export async function load(key: string) {
   const value = await $fetch('/value')
   cache.set(key, { value, expiresAt: metrics() + 1000 })
   return value
+}`,
+  ],
+  [
+    "a synchronous rate-limit window measured by age",
+    `const hits = new Map<string, { count: number, at: number }>()
+export function allow(ip: string) {
+  const now = Date.now()
+  const entry = hits.get(ip)
+  if (!entry || now - entry.at > 60_000) {
+    hits.set(ip, { count: 1, at: now })
+    return true
+  }
+  entry.count++
+  return entry.count <= 10
+}`,
+  ],
+  [
+    "an age check that only logs a stale hit",
+    `const cache = new Map<string, { value: unknown, at: number }>()
+export async function load(key: string) {
+  const hit = cache.get(key)
+  if (hit) {
+    if (Date.now() - hit.at > 60_000) console.warn('old hit')
+    return hit.value
+  }
+  const value = await $fetch('/value')
+  cache.set(key, { value, at: Date.now() })
+  return value
+}`,
+  ],
+  [
+    "an age-based rate limiter with an unrelated await",
+    `const hits = new Map<string, { count: number, at: number, auditId: string }>()
+export async function countHits(ip: string) {
+  const now = Date.now()
+  const entry = hits.get(ip)
+  if (entry && now - entry.at < 60_000) return entry.count
+  const auditId = await audit(ip)
+  hits.set(ip, { count: 1, at: now, auditId })
+  return 1
+}`,
+  ],
+  [
+    "a throttle measured by age",
+    `let lastCall = 0
+export async function ping() {
+  if (Date.now() - lastCall < 1000) return
+  lastCall = Date.now()
+  await $fetch('/ping')
 }`,
   ],
 ])("does not report %s", async (_, source) => {
